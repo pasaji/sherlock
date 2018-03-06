@@ -17,8 +17,8 @@ class ExchangeAPI {
       read(size) {}
     })
     const e = this.exchanges[ exchange ]
-    const timeframe = e.timeframes['30m'] * 1000
-    e.fetchOHLCV(market, '30m', now() - 2 * WEEK, 99999).then((result) => {
+    const timeframe = e.timeframes['15m'] * 1000
+    e.fetchOHLCV(market, '15m', now() - WEEK, 99999).then((result) => {
       result.forEach((item) => {
         rs.push({ date: item[0], open: item[1], high: item[2], low: item[3], close: item[4], volume: item[5], timeframe })
       })

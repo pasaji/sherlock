@@ -2,7 +2,7 @@ const { Duplex } = require('stream') // TODO: Dublex
 
 // NOTE: The ZigZag is not an indicator per se, but rather a means to filter out smaller price movements.
 class ZicZacStream extends Duplex {
-  constructor({ sensitivity = 2, highPropertyName = 'high', lowPropertyName = 'low', suffix = '' } = {}) {
+  constructor({ sensitivity = 2, highPropertyName = 'high', lowPropertyName = 'low', range, suffix = '' } = {}) {
     super({ objectMode: true })
     this.sensitivity = sensitivity
     this.lowPropertyName = lowPropertyName
@@ -12,35 +12,40 @@ class ZicZacStream extends Duplex {
     this.buffer = []
     this.highs = []
     this.lows = []
-    this.frequencies = []
     this.changes = []
+    this.lastType = null
+    this.range = range
 
     this.highIndex = 0
     this.lowIndex = 0
   }
 
-  check() {
+  check(last = false) {
 
     if (this.buffer.length < 2) {
       return
     }
 
     const index = this.buffer.length - 1
-    this.highIndex = this.buffer[ this.highIndex ][ this.highPropertyName ] >= this.buffer[ index ][ this.highPropertyName ] ? this.highIndex : index
-    this.lowIndex = this.buffer[ this.lowIndex ][ this.lowPropertyName ] <= this.buffer[index][ this.lowPropertyName ] ? this.lowIndex : index
+
+    if (this.lastType === 'low') {
+      this.lowIndex = this.buffer[ this.lowIndex ][ this.lowPropertyName ] <= this.buffer[index][ this.lowPropertyName ] ? this.lowIndex : index
+    } else if (this.lastType === 'high') {
+      this.highIndex = this.buffer[ this.highIndex ][ this.highPropertyName ] >= this.buffer[ index ][ this.highPropertyName ] ? this.highIndex : index
+    } else {
+      this.highIndex = this.buffer[ this.highIndex ][ this.highPropertyName ] >= this.buffer[ index ][ this.highPropertyName ] ? this.highIndex : index
+      this.lowIndex = this.buffer[ this.lowIndex ][ this.lowPropertyName ] <= this.buffer[index][ this.lowPropertyName ] ? this.lowIndex : index
+    }
 
     const lo = this.buffer[ this.lowIndex ][ this.lowPropertyName ]
     const hi = this.buffer[ this.highIndex ][ this.highPropertyName ]
     const latestLo = this.buffer[ index ][ this.lowPropertyName ]
     const latestHi = this.buffer[ index ][ this.highPropertyName ]
-    const gap = lo * this.sensitivity / 100
+    const gap = ( this.range ? this.range.max - this.range.min : lo ) * this.sensitivity / 100
 
-    if (hi - gap > lo && lo < latestHi - gap && this.highIndex < this.lowIndex) {
-      // console.log('H', {hi, lo, latestHi, latestLo, gap, index})
+    if ( this.highIndex < this.lowIndex && hi - gap > lo && (lo < latestHi - gap || last) ) {
       this.addHigh(this.highIndex)
-
-    } else if (lo + gap < hi && hi > latestLo + gap && this.highIndex > this.lowIndex) {
-      // console.log('L', {hi, lo, latestHi, latestLo, gap, index})
+    } else if ( this.highIndex > this.lowIndex && lo + gap < hi && (hi > latestLo + gap || last) ) {
       this.addLow(this.lowIndex)
     }
   }
@@ -49,13 +54,13 @@ class ZicZacStream extends Duplex {
     const lo = this.buffer[ this.lowIndex ][ this.lowPropertyName ]
     const hi = this.buffer[ this.highIndex ][ this.highPropertyName ]
     const change = hi - lo
-    const frequency = (this.lowIndex - this.highIndex) * 2
+    const period = this.lowIndex - this.highIndex
 
     this.changes.push(Math.abs(change))
     this.highs.push(hi)
-    this.frequencies.push( frequency )
+    this.lastType = 'high'
 
-    this.buffer[index]['ziczac' + this.suffix] = { type: 'high', change, avgChange: this.getAvg(this.changes, 20), frequency: this.getAvg(this.frequencies, 20) }
+    this.buffer[index]['ziczac' + this.suffix] = { type: 'high', change, period }
     this.highIndex = this.buffer.length - 1
     this.flush(this.lowIndex)
   }
@@ -64,13 +69,13 @@ class ZicZacStream extends Duplex {
     const lo = this.buffer[ this.lowIndex ][ this.lowPropertyName ]
     const hi = this.buffer[ this.highIndex ][ this.highPropertyName ]
     const change = lo - hi
-    const frequency = (this.highIndex - this.lowIndex) * 2
+    const period = this.highIndex - this.lowIndex
 
     this.changes.push(Math.abs(change))
     this.lows.push(lo)
-    this.frequencies.push( frequency )
+    this.lastType = 'low'
 
-    this.buffer[index]['ziczac' + this.suffix] = { type: 'low', change, avgChange: this.getAvg(this.changes, 50), frequency: this.getAvg(this.frequencies, 50) }
+    this.buffer[index]['ziczac' + this.suffix] = { type: 'low', change, period }
     this.lowIndex = this.buffer.length - 1
     this.flush(this.highIndex)
   }
@@ -80,8 +85,8 @@ class ZicZacStream extends Duplex {
     while (this.buffer.length > bufferLenght) {
       this.push(this.buffer.shift())
     }
-    this.lowIndex = this.lowIndex - index
-    this.highIndex = this.highIndex - index
+    this.lowIndex = Math.max(this.lowIndex - index, 0)
+    this.highIndex = Math.max(this.highIndex - index, 0)
   }
 
   getAvg(values, maxPeriod) {
@@ -105,8 +110,8 @@ class ZicZacStream extends Duplex {
   }
 
   _final(callback) {
-    // TODO: add last item
-
+    // last check
+    this.check(true)
     this.flush(this.buffer.length)
     callback()
   }
